@@ -233,14 +233,25 @@ def process(item, ref, now, old_detail=None):
 def bing_news(query):
     """Bing-News-RSS: enthält die echte Artikel-Adresse (Parameter url=), daher direkt aufrufbar."""
     q = urllib.parse.quote(query)
-    raw = http_get(f"https://www.bing.com/news/search?q={q}&format=rss&setlang=de-DE&cc=DE",
-                   accept="application/rss+xml")
-    root = ET.fromstring(raw)
+    root = None
+    for _ in range(3):
+        raw = http_get(f"https://www.bing.com/news/search?q={q}&format=rss&setlang=de-DE&cc=DE",
+                       accept="application/rss+xml")
+        try:
+            root = ET.fromstring(raw)
+            break
+        except ET.ParseError:
+            time.sleep(2)
+    if root is None:
+        raise RuntimeError("Bing lieferte kein RSS")
     items = []
     for it in root.iter("item"):
         link = it.findtext("link") or ""
         real = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get("url", [None])[0]
-        if not real or not real.startswith("http"):
+        title = html.unescape((it.findtext("title") or "").strip())
+        if not real or not real.startswith("http") or len(title) < 15 or " teilen" in title:
+            continue
+        if "/chart/" in real or "kursprognose" in real.lower():
             continue
         source = ""
         for ch in it:
@@ -252,7 +263,7 @@ def bing_news(query):
             t = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
         except Exception:  # noqa: BLE001
             t = None
-        items.append({"t": html.unescape((it.findtext("title") or "").strip()), "u": real, "s": source, "d": t})
+        items.append({"t": title, "u": real, "s": source, "d": t})
     return items
 
 

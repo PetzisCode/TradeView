@@ -615,6 +615,14 @@ function openPositionSheet(id) {
       <div class="help">Findest du in Trade Republic unter der Position. Damit wird dein Gewinn/Verlust berechnet.</div></div>
     <div class="field" id="amountWrap"><label for="fAmount">… oder Positionswert in € eingeben</label>
       <input id="fAmount" inputmode="decimal" placeholder="rechnet die Stückzahl aus"></div>
+    ${h ? `<button class="btn ghost block" id="fAddToggle" style="margin-bottom:12px">＋ Nachkauf erfassen</button>
+    <div id="addWrap" class="hidden">
+      <div class="field"><label for="fAddShares">Nachgekaufte Stück</label>
+        <input id="fAddShares" inputmode="decimal" placeholder="z. B. 3"></div>
+      <div class="field"><label for="fAddPrice">Kaufkurs des Nachkaufs je Stück in €</label>
+        <input id="fAddPrice" inputmode="decimal" value="${q.p != null ? num(q.p, 2) : ''}">
+        <div class="help" id="addInfo">Stückzahl und Einstandskurs werden automatisch neu berechnet.</div></div>
+    </div>` : ''}
     <button class="btn block" id="fSave">Speichern</button>
     ${h ? '<button class="btn danger block" id="fDel" style="margin-top:6px">Aus Depot entfernen</button>' : ''}
   `, (sh) => {
@@ -624,9 +632,35 @@ function openPositionSheet(id) {
       if (a > 0 && q.p) shares.value = num(a / q.p, 6);
     });
     setTimeout(() => shares.focus(), 250);
+    const addShares = $('#fAddShares', sh), addPrice = $('#fAddPrice', sh);
+    $('#fAddToggle', sh)?.addEventListener('click', (e) => {
+      $('#addWrap', sh).classList.remove('hidden');
+      $('#amountWrap', sh).classList.add('hidden');
+      e.currentTarget.classList.add('hidden');
+      setTimeout(() => addShares.focus(), 50);
+    });
+    const combined = () => {
+      let s = parseNum(shares.value);
+      let b = parseNum($('#fBuy', sh).value);
+      const as = addShares ? parseNum(addShares.value) : NaN;
+      const ap = addPrice ? parseNum(addPrice.value) : NaN;
+      if (as > 0 && ap > 0 && s > 0) {
+        b = b > 0 ? (s * b + as * ap) / (s + as) : NaN;
+        s = s + as;
+      }
+      return { s, b };
+    };
+    const showInfo = () => {
+      const c = combined();
+      const info = $('#addInfo', sh);
+      if (info && parseNum(addShares.value) > 0) {
+        info.textContent = `Neu: ${num(c.s)} Stück` + (c.b > 0 ? ` · Ø Einstandskurs ${eur(c.b)}` : ' · ohne bisherigen Einstandskurs kein Durchschnitt');
+      }
+    };
+    addShares?.addEventListener('input', showInfo);
+    addPrice?.addEventListener('input', showInfo);
     $('#fSave', sh).addEventListener('click', () => {
-      const s = parseNum(shares.value);
-      const b = parseNum($('#fBuy', sh).value);
+      const { s, b } = combined();
       if (!(s > 0)) { shares.focus(); toast('Bitte eine Stückzahl eingeben'); return; }
       const entry = { id, shares: s, buy: b > 0 ? b : null };
       const i = S.store.holdings.findIndex((x) => x.id === id);
