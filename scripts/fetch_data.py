@@ -6,6 +6,7 @@ für die Web-App.
 Aufruf: python3 scripts/fetch_data.py <ausgabe-ordner> [<ordner-mit-alten-daten>]
 Nur Standardbibliothek – läuft ohne Installation auf GitHub Actions.
 """
+import html
 import json
 import os
 import sys
@@ -229,7 +230,33 @@ def process(item, ref, now, old_detail=None):
     return summary, detail
 
 
-def news(query):
+def bing_news(query):
+    """Bing-News-RSS: enthält die echte Artikel-Adresse (Parameter url=), daher direkt aufrufbar."""
+    q = urllib.parse.quote(query)
+    raw = http_get(f"https://www.bing.com/news/search?q={q}&format=rss&setlang=de-DE&cc=DE",
+                   accept="application/rss+xml")
+    root = ET.fromstring(raw)
+    items = []
+    for it in root.iter("item"):
+        link = it.findtext("link") or ""
+        real = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get("url", [None])[0]
+        if not real or not real.startswith("http"):
+            continue
+        source = ""
+        for ch in it:
+            if ch.tag.endswith("Source") and ch.text:
+                source = ch.text.strip()
+        if not source:
+            source = urllib.parse.urlparse(real).netloc.replace("www.", "")
+        try:
+            t = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
+        except Exception:  # noqa: BLE001
+            t = None
+        items.append({"t": html.unescape((it.findtext("title") or "").strip()), "u": real, "s": source, "d": t})
+    return items
+
+
+def google_news(query):
     q = urllib.parse.quote(f"{query} when:14d")
     raw = http_get(f"https://news.google.com/rss/search?q={q}&hl=de&gl=DE&ceid=DE:de",
                    accept="application/rss+xml")
@@ -241,13 +268,33 @@ def news(query):
         source = (src_el.text or "").strip() if src_el is not None else ""
         if source and title.endswith(" - " + source):
             title = title[: -len(source) - 3]
+        # Google-Links landen auf dem iPhone oft auf einer Sperrseite -> Startseite der Quelle verlinken
+        home = src_el.get("url") if src_el is not None else None
         try:
             t = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
         except Exception:  # noqa: BLE001
             t = None
-        items.append({"t": title, "u": it.findtext("link"), "s": source, "d": t})
-    items.sort(key=lambda x: x["d"] or 0, reverse=True)
-    return items[:12]
+        if home:
+            items.append({"t": title, "u": home, "s": source, "d": t})
+    return items
+
+
+def news(query):
+    items = []
+    try:
+        items = bing_news(query)
+    except Exception as e:  # noqa: BLE001
+        print("Bing-Fehler", query, e, file=sys.stderr, flush=True)
+    if len(items) < 3:
+        items += google_news(query)
+    seen, out = set(), []
+    for x in sorted(items, key=lambda x: x["d"] or 0, reverse=True):
+        key = x["t"].lower()[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(x)
+    return out[:12]
 
 
 def main():
@@ -297,7 +344,8 @@ def main():
                 continue
             summary = prev_sum
             detail = {k: prev_detail.get(k, []) for k in ("intra", "week", "daily", "weekly")}
-        if refresh_news or not prev_detail.get("news"):
+        old_news = prev_detail.get("news") or []
+        if refresh_news or not old_news or any("news.google.com" in (n.get("u") or "") for n in old_news):
             try:
                 detail["news"] = news(item.get("news") or f"{item['name']} Aktie")
             except Exception as e:  # noqa: BLE001

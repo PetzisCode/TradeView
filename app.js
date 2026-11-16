@@ -441,7 +441,7 @@ function viewDetail(id) {
   }
 
   html += `<div class="section-h"><h2>Nachrichten</h2></div><div class="list news" id="news"><div class="row muted">Lade Nachrichten …</div></div>
-    <p class="note">${esc(stampLine())}. Nachrichten über Google News. Keine Anlageberatung.</p>`;
+    <p class="note">${esc(stampLine())}. Nachrichten über Bing News. Keine Anlageberatung.</p>`;
   return html;
 }
 

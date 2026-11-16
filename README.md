@@ -13,7 +13,7 @@ Persönliche Depot-Übersicht als Web-App fürs iPhone – für Aktien, ETFs und
 
 ## So funktioniert's
 Der Workflow `.github/workflows/update.yml` lädt an Börsentagen alle ~20 Minuten Kurse
-(onvista, bevorzugt LS Exchange = Trade-Republic-Handelsplatz) und Nachrichten (Google News) für alle Werte aus `catalog.json` und veröffentlicht App + Daten im Branch `gh-pages`.
+(onvista, bevorzugt LS Exchange = Trade-Republic-Handelsplatz) und Nachrichten (Bing News) für alle Werte aus `catalog.json` und veröffentlicht App + Daten im Branch `gh-pages`.
 
 **Neues Wertpapier ergänzen:** Eintrag in `catalog.json` hinzufügen (mit `isin`).
 
