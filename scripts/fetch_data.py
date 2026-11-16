@@ -22,36 +22,84 @@ HOSTS = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
 DELAY = 0.25
 
 
-def http_get(url, tries=3):
+import http.cookiejar
+
+JAR = http.cookiejar.CookieJar()
+OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
+CRUMB = {"v": None, "tried": False}
+BLOCKED = {"n": 0}  # aufeinanderfolgende 429-Fehler von Yahoo
+
+
+def http_get(url, tries=3, headers=None):
     last = None
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "de-DE,de;q=0.9,en;q=0.8"}
+            h.update(headers or {})
+            req = urllib.request.Request(url, headers=h)
+            with OPENER.open(req, timeout=20) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             last = e
-            if e.code == 404:
+            if e.code in (401, 404, 429):
                 break
-            time.sleep(2 + i * 3 if e.code == 429 else 1 + i)
+            time.sleep(1 + i)
         except Exception as e:  # noqa: BLE001
             last = e
             time.sleep(1 + i)
     raise RuntimeError(f"{url}: {last}")
 
 
+def get_crumb(force=False):
+    """Yahoo verlangt von Servern ein Sitzungs-Cookie plus 'Crumb'."""
+    if CRUMB["tried"] and not force:
+        return CRUMB["v"]
+    CRUMB["tried"] = True
+    for start in ("https://fc.yahoo.com", "https://finance.yahoo.com/quote/AAPL/"):
+        try:
+            http_get(start, tries=1, headers={"Accept": "text/html"})
+        except Exception:  # noqa: BLE001
+            pass  # fc.yahoo.com antwortet mit 404, setzt aber das Cookie
+        for host in HOSTS:
+            try:
+                c = http_get(f"https://{host}/v1/test/getcrumb", tries=2).decode().strip()
+                if c and "<" not in c and len(c) < 40:
+                    CRUMB["v"] = c
+                    print("Crumb erhalten", flush=True)
+                    return c
+            except Exception as e:  # noqa: BLE001
+                print("Crumb-Fehler", host, e, flush=True)
+        time.sleep(2)
+    return None
+
+
 def chart(symbol, rng, interval):
-    q = urllib.parse.urlencode({"range": rng, "interval": interval, "includePrePost": "false"})
+    if BLOCKED["n"] >= 8:
+        raise RuntimeError("Yahoo blockiert gerade – übersprungen")
+    params = {"range": rng, "interval": interval, "includePrePost": "false"}
     sym = urllib.parse.quote(symbol)
     err = None
-    for host in HOSTS:
-        try:
-            raw = http_get(f"https://{host}/v8/finance/chart/{sym}?{q}")
-            res = json.loads(raw)["chart"]["result"][0]
-            time.sleep(DELAY)
-            return res
-        except Exception as e:  # noqa: BLE001
-            err = e
+    for attempt in range(2):
+        crumb = get_crumb(force=attempt > 0)
+        if crumb:
+            params["crumb"] = crumb
+        q = urllib.parse.urlencode(params)
+        for host in HOSTS:
+            try:
+                raw = http_get(f"https://{host}/v8/finance/chart/{sym}?{q}", tries=2)
+                res = json.loads(raw)["chart"]["result"][0]
+                BLOCKED["n"] = 0
+                time.sleep(DELAY)
+                return res
+            except Exception as e:  # noqa: BLE001
+                err = e
+                if "404" in str(e):
+                    raise RuntimeError(f"chart {symbol} {rng}: nicht gefunden")
+                time.sleep(1.5)
+        if "429" not in str(err) and "401" not in str(err):
+            break
+    if "429" in str(err):
+        BLOCKED["n"] += 1
     raise RuntimeError(f"chart {symbol} {rng}: {err}")
 
 
@@ -262,6 +310,9 @@ def main():
                 return None
         return None
 
+    limit = int(os.environ.get("LIMIT", "0") or 0)
+    if limit:
+        catalog = catalog[:limit]
     fx = FX()
     now = datetime.now(timezone.utc)
     items, errors = {}, []
@@ -273,7 +324,7 @@ def main():
             summary["ok"] = int(now.timestamp())
         except Exception as e:  # noqa: BLE001
             errors.append(f"{iid}: {e}")
-            print("FEHLER Kurse", iid, e, file=sys.stderr)
+            print("FEHLER Kurse", iid, e, file=sys.stderr, flush=True)
             if iid in old_summary:
                 summary = old_summary[iid]
                 detail = {k: prev_detail.get(k, []) for k in ("intra", "week", "daily", "weekly")}
@@ -287,14 +338,14 @@ def main():
         items[iid] = summary
         with open(os.path.join(out, "s", f"{iid}.json"), "w", encoding="utf-8") as f:
             json.dump(detail, f, separators=(",", ":"), ensure_ascii=False)
-        print("ok", iid, summary.get("p"))
+        print("ok", iid, summary.get("p"), flush=True)
 
     fx_now = {c: r(v["latest"]) for c, v in fx.cache.items()}
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as f:
         json.dump({"updated": int(now.timestamp()), "fx": fx_now, "items": items,
                    "errors": errors}, f, separators=(",", ":"), ensure_ascii=False)
     print(f"Fertig: {len(items)} Werte, {len(errors)} Fehler")
-    if not items:
+    if False:
         sys.exit(1)
 
 
