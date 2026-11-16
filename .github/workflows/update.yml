@@ -1,0 +1,56 @@
+name: Kurse aktualisieren & veröffentlichen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Börsentage: alle 20 Minuten zwischen ca. 8 und 22:40 Uhr deutscher Zeit
+    - cron: "5,25,45 7-21 * * 1-5"
+    # Wochenende (Krypto, Nachrichten): alle 2 Stunden
+    - cron: "15 */2 * * 0,6"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bisherige Daten holen (Fallback bei Fehlern)
+        run: |
+          mkdir -p /tmp/old
+          if git fetch --depth=1 origin gh-pages 2>/dev/null; then
+            git archive FETCH_HEAD data | tar -x -C /tmp/old || true
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kurse und Nachrichten laden
+        run: python3 scripts/fetch_data.py _site/data /tmp/old/data
+
+      - name: Seite zusammenstellen
+        run: |
+          cp index.html app.js style.css sw.js manifest.webmanifest catalog.json _site/
+          cp -r icons _site/
+          touch _site/.nojekyll
+          sed -i "s/__BUILD__/${GITHUB_SHA::8}/" _site/sw.js _site/index.html
+
+      - name: Nach gh-pages veröffentlichen
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Daten $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
