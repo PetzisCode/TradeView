@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Holt Kurse (Yahoo Finance) und Nachrichten (Google News) für alle Wertpapiere
-aus catalog.json, rechnet in Euro um und schreibt JSON-Dateien für die Web-App.
+"""Holt Kurse (onvista, bevorzugt LS Exchange = Handelsplatz von Trade Republic) und
+Nachrichten (Google News) für alle Wertpapiere aus catalog.json und schreibt JSON-Dateien
+für die Web-App.
 
 Aufruf: python3 scripts/fetch_data.py <ausgabe-ordner> [<ordner-mit-alten-daten>]
 Nur Standardbibliothek – läuft ohne Installation auf GitHub Actions.
@@ -14,164 +15,42 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-HOSTS = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
-DELAY = 0.25
+API = "https://api.onvista.de/api/v1"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+      "(KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+DELAY = 0.3
+BERLIN = ZoneInfo("Europe/Berlin")
+# Bevorzugte Handelsplätze: LS Exchange / Lang & Schwarz (Trade Republic), dann Tradegate, Xetra …
+MARKETS = ["_LSX", "@_LUSG", "_GAT", "_GER", "_TRO", "@_BBF", "_FRA", "_STU", "_BFN"]
+ENTITY_PATH = {"aktie": "stocks", "etf": "funds"}
 
 
-import http.cookiejar
-
-JAR = http.cookiejar.CookieJar()
-OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
-CRUMB = {"v": None, "tried": False}
-BLOCKED = {"n": 0}  # aufeinanderfolgende 429-Fehler von Yahoo
-
-
-def http_get(url, tries=3, headers=None):
+def http_get(url, tries=3, accept="application/json"):
     last = None
     for i in range(tries):
         try:
-            h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "de-DE,de;q=0.9,en;q=0.8"}
-            h.update(headers or {})
-            req = urllib.request.Request(url, headers=h)
-            with OPENER.open(req, timeout=20) as r:
-                return r.read()
+            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": accept,
+                                                       "Accept-Language": "de-DE,de;q=0.9"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                data = r.read()
+            time.sleep(DELAY)
+            return data
         except urllib.error.HTTPError as e:
             last = e
-            if e.code in (401, 404, 429):
+            if e.code in (400, 403, 404):
                 break
-            time.sleep(1 + i)
+            time.sleep(2 + i * 3)
         except Exception as e:  # noqa: BLE001
             last = e
-            time.sleep(1 + i)
+            time.sleep(1 + i * 2)
     raise RuntimeError(f"{url}: {last}")
 
 
-def get_crumb(force=False):
-    """Yahoo verlangt von Servern ein Sitzungs-Cookie plus 'Crumb'."""
-    if CRUMB["tried"] and not force:
-        return CRUMB["v"]
-    CRUMB["tried"] = True
-    for start in ("https://fc.yahoo.com", "https://finance.yahoo.com/quote/AAPL/"):
-        try:
-            http_get(start, tries=1, headers={"Accept": "text/html"})
-        except Exception:  # noqa: BLE001
-            pass  # fc.yahoo.com antwortet mit 404, setzt aber das Cookie
-        for host in HOSTS:
-            try:
-                c = http_get(f"https://{host}/v1/test/getcrumb", tries=2).decode().strip()
-                if c and "<" not in c and len(c) < 40:
-                    CRUMB["v"] = c
-                    print("Crumb erhalten", flush=True)
-                    return c
-            except Exception as e:  # noqa: BLE001
-                print("Crumb-Fehler", host, e, flush=True)
-        time.sleep(2)
-    return None
-
-
-def chart(symbol, rng, interval):
-    if BLOCKED["n"] >= 8:
-        raise RuntimeError("Yahoo blockiert gerade – übersprungen")
-    params = {"range": rng, "interval": interval, "includePrePost": "false"}
-    sym = urllib.parse.quote(symbol)
-    err = None
-    for attempt in range(2):
-        crumb = get_crumb(force=attempt > 0)
-        if crumb:
-            params["crumb"] = crumb
-        q = urllib.parse.urlencode(params)
-        for host in HOSTS:
-            try:
-                raw = http_get(f"https://{host}/v8/finance/chart/{sym}?{q}", tries=2)
-                res = json.loads(raw)["chart"]["result"][0]
-                BLOCKED["n"] = 0
-                time.sleep(DELAY)
-                return res
-            except Exception as e:  # noqa: BLE001
-                err = e
-                if "404" in str(e):
-                    raise RuntimeError(f"chart {symbol} {rng}: nicht gefunden")
-                time.sleep(1.5)
-        if "429" not in str(err) and "401" not in str(err):
-            break
-    if "429" in str(err):
-        BLOCKED["n"] += 1
-    raise RuntimeError(f"chart {symbol} {rng}: {err}")
-
-
-def series(res):
-    ts = res.get("timestamp") or []
-    try:
-        closes = res["indicators"]["quote"][0]["close"]
-    except (KeyError, IndexError):
-        return []
-    adj = None
-    try:
-        adj = res["indicators"]["adjclose"][0]["adjclose"]
-    except (KeyError, IndexError):
-        pass
-    out = []
-    for i, t in enumerate(ts):
-        c = closes[i] if i < len(closes) else None
-        if c is None:
-            continue
-        out.append([int(t), float(c)])
-    return out
-
-
-def norm_currency(cur):
-    """Liefert (Währung, Faktor) – z. B. britische Pence -> GBP / 100."""
-    if cur == "GBp" or cur == "GBX":
-        return "GBP", 0.01
-    if cur == "ZAc":
-        return "ZAR", 0.01
-    if cur == "ILA":
-        return "ILS", 0.01
-    return (cur or "EUR").upper(), 1.0
-
-
-class FX:
-    """Wechselkurse EUR->Fremdwährung, je Tag (Fallback: letzter bekannter Kurs)."""
-
-    def __init__(self):
-        self.cache = {}
-
-    def load(self, cur):
-        if cur in self.cache or cur == "EUR":
-            return
-        res = chart(f"EUR{cur}=X", "10y", "1d")
-        s = series(res)
-        days = {}
-        for t, v in s:
-            days[datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")] = v
-        latest = res["meta"].get("regularMarketPrice") or (s[-1][1] if s else None)
-        self.cache[cur] = {"days": days, "sorted": sorted(days), "latest": latest}
-
-    def rate(self, cur, t=None):
-        if cur == "EUR":
-            return 1.0
-        self.load(cur)
-        c = self.cache[cur]
-        if t is None:
-            return c["latest"]
-        d = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
-        if d in c["days"]:
-            return c["days"][d]
-        # letzter Tag davor
-        lo, hi = 0, len(c["sorted"]) - 1
-        best = None
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if c["sorted"][mid] <= d:
-                best = c["sorted"][mid]
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        return c["days"][best] if best else c["latest"]
+def get_json(url):
+    return json.loads(http_get(url))
 
 
 def r(v):
@@ -184,16 +63,13 @@ def r(v):
     return float(f"{v:.6g}")
 
 
-def to_eur(s, cur, factor, fx, per_day=True):
-    out = []
-    for t, v in s:
-        rate = fx.rate(cur, t if per_day else None)
-        out.append([t, r(v * factor / rate)])
-    return out
+def pct(a, b):
+    if a is None or b in (None, 0):
+        return None
+    return round((a / b - 1) * 100, 3)
 
 
 def value_at(s, t):
-    """Schlusskurs am letzten Punkt <= t."""
     best = None
     for tt, v in s:
         if tt <= t:
@@ -203,16 +79,153 @@ def value_at(s, t):
     return best
 
 
-def pct(a, b):
-    if a is None or b in (None, 0):
+def ts(iso):
+    if not iso:
         return None
-    return round((a / b - 1) * 100, 3)
+    try:
+        return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+class ECB:
+    """Wechselkurse (Fremdwährung je Euro) der EZB – nur für den seltenen Fall ohne Euro-Kurs."""
+    cache = {}
+
+    @classmethod
+    def rate(cls, cur):
+        cur = (cur or "EUR").upper()
+        if cur == "EUR":
+            return 1.0
+        if cur not in cls.cache:
+            raw = http_get(f"https://data-api.ecb.europa.eu/service/data/EXR/D.{cur}.EUR.SP00.A"
+                           f"?format=csvdata&lastNObservations=1", accept="text/csv").decode()
+            rows = raw.strip().splitlines()
+            head = rows[0].split(",")
+            cls.cache[cur] = float(rows[-1].split(",")[head.index("OBS_VALUE")])
+        return cls.cache[cur]
+
+
+def snapshot(item, ref):
+    if item.get("onvista"):
+        return get_json(f"{API}/instruments/{item['onvista']}/snapshot")
+    if ref.get("et") and ref.get("ev"):
+        return get_json(f"{API}/instruments/{ref['et']}/{ref['ev']}/snapshot")
+    path = ENTITY_PATH.get(item["type"])
+    if path:
+        try:
+            return get_json(f"{API}/{path}/ISIN:{item['isin']}/snapshot")
+        except RuntimeError:
+            pass
+    # Fallback: über die Suche Typ und ID ermitteln (z. B. ETCs)
+    res = get_json(f"{API}/instruments/query?searchValue={item['isin']}&limit=3")
+    for x in res.get("list", []):
+        if x.get("isin") == item["isin"]:
+            return get_json(f"{API}/instruments/{x['entityType']}/{x['entityValue']}/snapshot")
+    raise RuntimeError("nicht gefunden")
+
+
+def pick_quote(snap):
+    ql = (snap.get("quoteList") or {}).get("list") or []
+    for code in MARKETS:
+        for q in ql:
+            if q.get("market", {}).get("codeMarket") == code and q.get("isoCurrency") == "EUR" and q.get("last"):
+                return q
+    for q in ql:
+        if q.get("isoCurrency") == "EUR" and q.get("last"):
+            return q
+    if (snap.get("quote") or {}).get("last"):
+        return snap["quote"]
+    for q in ql:
+        if q.get("last"):
+            return q
+    raise RuntimeError("kein Kurs")
+
+
+def process(item, ref, now):
+    snap = snapshot(item, ref)
+    inst = snap["instrument"]
+    et, ev = inst["entityType"], inst["entityValue"]
+    q = pick_quote(snap)
+    nid = q["market"]["idNotation"]
+    fx = ECB.rate(q.get("isoCurrency"))
+
+    def conv(v):
+        return None if v is None else v / fx
+
+    price = conv(q.get("last"))
+    prev = conv(q.get("previousLast"))
+    t_last = ts(q.get("datetimeLast")) or int(now.timestamp())
+
+    # Tagesschlusskurse der letzten 5 Jahre
+    start = (now.date() - timedelta(days=5 * 366)).isoformat()
+    eod = get_json(f"{API}/instruments/{et}/{ev}/eod_history?idNotation={nid}&range=Y5&startDate={start}")
+    daily = [[int(t), r(conv(v))] for t, v in zip(eod.get("datetimeLast", []), eod.get("last", [])) if v is not None]
+    daily.sort()
+    if price is not None and (not daily or daily[-1][0] < t_last - 6 * 3600):
+        daily.append([t_last, r(price)])
+
+    # Verlauf der letzten Woche (Stundenwerte) – daraus auch der Tagesverlauf
+    wk_start = (now.date() - timedelta(days=8)).isoformat()
+    try:
+        w = get_json(f"{API}/instruments/{et}/{ev}/simple_chart_history?chartType=PRICE"
+                     f"&endDate={now.date().isoformat()}&idNotation={nid}&interval=W1&startDate={wk_start}")
+        week = [[int(t / 1000), r(conv(v))] for t, v in zip(w.get("datetimeTick", []), w.get("tick", [])) if v is not None]
+    except RuntimeError:
+        week = []
+    week.sort()
+    if price is not None and (not week or week[-1][0] < t_last - 60):
+        week.append([t_last, r(price)])
+    intra = []
+    if week:
+        last_day = datetime.fromtimestamp(week[-1][0], BERLIN).date()
+        intra = [p for p in week if datetime.fromtimestamp(p[0], BERLIN).date() == last_day]
+        if prev is not None and intra:
+            day_start = int(datetime.combine(last_day, datetime.min.time(), BERLIN).timestamp())
+            if intra[0][0] > day_start:
+                intra = [[day_start, r(prev)]] + intra
+
+    # Wochenwerte für 5 Jahre (letzter Kurs je Kalenderwoche)
+    weekly, seen = [], {}
+    for t, v in daily:
+        k = datetime.fromtimestamp(t, timezone.utc).isocalendar()[:2]
+        if k in seen:
+            weekly[seen[k]] = [t, v]
+        else:
+            seen[k] = len(weekly)
+            weekly.append([t, v])
+
+    def ago(days):
+        return value_at(daily, int((now - timedelta(days=days)).timestamp()))
+
+    ytd_base = value_at(daily, int(datetime(now.year, 1, 1, tzinfo=BERLIN).timestamp()) - 1)
+    has_5y = bool(daily) and daily[0][0] < (now - timedelta(days=365 * 5 - 10)).timestamp()
+    chg = {
+        "d": pct(price, prev),
+        "w": pct(price, ago(7)),
+        "m": pct(price, ago(30)),
+        "m6": pct(price, ago(182)),
+        "ytd": pct(price, ytd_base),
+        "y": pct(price, ago(365)),
+        "y5": pct(price, ago(365 * 5)) if has_5y else None,
+    }
+    summary = {
+        "p": r(price), "pc": r(prev), "c": chg,
+        "sp": [v for _, v in daily[-30:]],
+        "t": t_last,
+        "ex": q["market"].get("name"),
+        "cur": q.get("isoCurrency"),
+        "ref": {"et": et, "ev": ev},
+    }
+    two_years = (now - timedelta(days=740)).timestamp()
+    detail = {"intra": intra, "week": week, "daily": [p for p in daily if p[0] >= two_years], "weekly": weekly}
+    return summary, detail
 
 
 def news(query):
     q = urllib.parse.quote(f"{query} when:14d")
-    url = f"https://news.google.com/rss/search?q={q}&hl=de&gl=DE&ceid=DE:de"
-    raw = http_get(url)
+    raw = http_get(f"https://news.google.com/rss/search?q={q}&hl=de&gl=DE&ceid=DE:de",
+                   accept="application/rss+xml")
     root = ET.fromstring(raw)
     items = []
     for it in root.iter("item"):
@@ -222,64 +235,12 @@ def news(query):
         if source and title.endswith(" - " + source):
             title = title[: -len(source) - 3]
         try:
-            ts = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
+            t = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
         except Exception:  # noqa: BLE001
-            ts = None
-        items.append({"t": title, "u": it.findtext("link"), "s": source, "d": ts})
+            t = None
+        items.append({"t": title, "u": it.findtext("link"), "s": source, "d": t})
     items.sort(key=lambda x: x["d"] or 0, reverse=True)
-    time.sleep(DELAY)
     return items[:12]
-
-
-def process(item, fx, now):
-    sym = item["symbol"]
-    intraday = chart(sym, "1d", "5m")
-    meta = intraday["meta"]
-    cur, factor = norm_currency(meta.get("currency"))
-    week = chart(sym, "5d", "30m")
-    daily = chart(sym, "2y", "1d")
-    weekly = chart(sym, "10y", "1wk")
-
-    rate_now = fx.rate(cur)
-    price = meta.get("regularMarketPrice")
-    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-    price_eur = price * factor / rate_now if price is not None else None
-    prev_eur = prev * factor / rate_now if prev is not None else None
-
-    s_intra = to_eur(series(intraday), cur, factor, fx, per_day=False)
-    s_week = to_eur(series(week), cur, factor, fx, per_day=False)
-    s_daily = to_eur(series(daily), cur, factor, fx)
-    s_weekly = to_eur(series(weekly), cur, factor, fx)
-
-    # Für historische Vergleiche: aktuellen Kurs mit historischem EUR-Kurs vergleichen
-    def ago(days, src):
-        return value_at(src, int((now - timedelta(days=days)).timestamp()))
-
-    year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-    ytd_base = value_at(s_daily, int(year_start.timestamp()) - 1)
-
-    chg = {
-        "d": pct(price_eur, prev_eur),
-        "w": pct(price_eur, ago(7, s_daily)),
-        "m": pct(price_eur, ago(30, s_daily)),
-        "m6": pct(price_eur, ago(182, s_daily)),
-        "ytd": pct(price_eur, ytd_base),
-        "y": pct(price_eur, ago(365, s_daily)),
-        "y5": pct(price_eur, ago(365 * 5, s_weekly)),
-    }
-    spark = [v for _, v in s_daily[-30:]]
-    summary = {
-        "p": r(price_eur),
-        "pc": r(prev_eur),
-        "c": chg,
-        "sp": spark,
-        "cur": cur,
-        "po": r(price * factor) if price is not None else None,
-        "t": meta.get("regularMarketTime"),
-        "ex": meta.get("exchangeName"),
-    }
-    detail = {"intra": s_intra, "week": s_week, "daily": s_daily, "weekly": s_weekly}
-    return summary, detail
 
 
 def main():
@@ -289,6 +250,9 @@ def main():
 
     with open(os.path.join(ROOT, "catalog.json"), encoding="utf-8") as f:
         catalog = json.load(f)
+    limit = int(os.environ.get("LIMIT", "0") or 0)
+    if limit:
+        catalog = catalog[:limit]
 
     old_summary = {}
     if old and os.path.exists(os.path.join(old, "summary.json")):
@@ -299,10 +263,8 @@ def main():
             pass
 
     def old_detail(i):
-        if not old:
-            return None
-        p = os.path.join(old, "s", f"{i}.json")
-        if os.path.exists(p):
+        p = os.path.join(old or "", "s", f"{i}.json")
+        if old and os.path.exists(p):
             try:
                 with open(p, encoding="utf-8") as f:
                     return json.load(f)
@@ -310,43 +272,41 @@ def main():
                 return None
         return None
 
-    limit = int(os.environ.get("LIMIT", "0") or 0)
-    if limit:
-        catalog = catalog[:limit]
-    fx = FX()
     now = datetime.now(timezone.utc)
+    # Nachrichten nur etwa stündlich neu laden (spart Anfragen)
+    refresh_news = now.minute < 20 or not old_summary
     items, errors = {}, []
     for item in catalog:
         iid = item["id"]
         prev_detail = old_detail(iid) or {}
+        prev_sum = old_summary.get(iid, {})
         try:
-            summary, detail = process(item, fx, now)
+            summary, detail = process(item, prev_sum.get("ref") or {}, now)
             summary["ok"] = int(now.timestamp())
         except Exception as e:  # noqa: BLE001
             errors.append(f"{iid}: {e}")
             print("FEHLER Kurse", iid, e, file=sys.stderr, flush=True)
-            if iid in old_summary:
-                summary = old_summary[iid]
-                detail = {k: prev_detail.get(k, []) for k in ("intra", "week", "daily", "weekly")}
-            else:
+            if not prev_sum:
                 continue
-        try:
-            detail["news"] = news(item.get("news") or f"{item['name']} Aktie")
-        except Exception as e:  # noqa: BLE001
-            print("FEHLER News", iid, e, file=sys.stderr)
+            summary = prev_sum
+            detail = {k: prev_detail.get(k, []) for k in ("intra", "week", "daily", "weekly")}
+        if refresh_news or not prev_detail.get("news"):
+            try:
+                detail["news"] = news(item.get("news") or f"{item['name']} Aktie")
+            except Exception as e:  # noqa: BLE001
+                print("FEHLER News", iid, e, file=sys.stderr, flush=True)
+                detail["news"] = prev_detail.get("news", [])
+        else:
             detail["news"] = prev_detail.get("news", [])
         items[iid] = summary
         with open(os.path.join(out, "s", f"{iid}.json"), "w", encoding="utf-8") as f:
             json.dump(detail, f, separators=(",", ":"), ensure_ascii=False)
-        print("ok", iid, summary.get("p"), flush=True)
+        print("ok", iid, summary.get("p"), summary.get("ex"), flush=True)
 
-    fx_now = {c: r(v["latest"]) for c, v in fx.cache.items()}
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump({"updated": int(now.timestamp()), "fx": fx_now, "items": items,
-                   "errors": errors}, f, separators=(",", ":"), ensure_ascii=False)
-    print(f"Fertig: {len(items)} Werte, {len(errors)} Fehler")
-    if False:
-        sys.exit(1)
+        json.dump({"updated": int(now.timestamp()), "items": items, "errors": errors},
+                  f, separators=(",", ":"), ensure_ascii=False)
+    print(f"Fertig: {len(items)} Werte, {len(errors)} Fehler", flush=True)
 
 
 if __name__ == "__main__":

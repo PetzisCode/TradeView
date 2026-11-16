@@ -20,7 +20,6 @@ const RANGES = [
   { k: 'm6', l: '6M' },
   { k: 'y1', l: '1J' },
   { k: 'y5', l: '5J' },
-  { k: 'max', l: 'Max' },
 ];
 
 const S = {
@@ -370,7 +369,7 @@ function renderMarketList() {
     if (f === 'depot' && !holding(c.id)) return false;
     if (f !== 'alle' && f !== 'depot' && c.type !== f) return false;
     if (!q) return true;
-    return [c.name, c.symbol, c.isin, c.region, c.id].some((x) => x && x.toLowerCase().includes(q));
+    return [c.name, c.ticker, c.isin, c.region, c.id].some((x) => x && x.toLowerCase().includes(q));
   });
   const el = $('#mlist');
   if (!el) return;
@@ -378,7 +377,7 @@ function renderMarketList() {
   el.innerHTML = rows.map((c) => {
     const qd = quote(c.id) || {};
     const d = qd.c?.d;
-    const sub = [c.isin || c.symbol, c.type === 'aktie' ? c.region : TYPE_LABEL[c.type]].filter(Boolean).join(' · ');
+    const sub = [c.ticker, c.isin, c.type === 'aktie' ? c.region : TYPE_LABEL[c.type]].filter(Boolean).join(' · ');
     return `<a class="row" href="#/w/${c.id}">
       <div class="main"><div class="name">${esc(c.name)}</div>
         <div class="meta">${holding(c.id) ? '<span class="check">✓ Im Depot</span> · ' : ''}${esc(sub)}</div></div>
@@ -411,11 +410,11 @@ function viewDetail(id) {
       <button class="iconbtn" data-refresh aria-label="Aktualisieren">${ICON_REFRESH}</button></div>
     <div class="d-head"><span class="tag">${TYPE_LABEL[c.type]}${c.region && c.type === 'aktie' ? ' · ' + esc(c.region) : ''}</span>
       <h1>${esc(c.name)}</h1>
-      <div class="ids">${esc([c.isin && 'ISIN ' + c.isin, c.symbol, q.ex].filter(Boolean).join(' · '))}</div></div>
+      <div class="ids">${esc([c.ticker, c.isin && 'ISIN ' + c.isin].filter(Boolean).join(' · '))}</div></div>
     <div class="hero" style="margin-bottom:0">
       <div class="big num" id="dPrice">${eur(q.p)}</div>
       <div class="sub ${cls(ch.d)}" id="dSub">${q.p != null && q.pc != null ? signedEur(q.p - q.pc) + ' (' + pct(ch.d) + ') heute' : '–'}</div>
-      ${q.cur && q.cur !== 'EUR' ? `<div class="stamp">Originalkurs ${num(q.po, 4)} ${esc(q.cur)} · in Euro umgerechnet</div>` : ''}
+      ${q.ex ? `<div class="stamp">Kurs ${esc(q.ex)}${q.t ? ' · ' + fmtDate(q.t, true) + ' Uhr' : ''}</div>` : ''}
     </div>
     <div class="chartbox" id="chart"><div class="chart-empty">Lade Verlauf …</div></div>
     <div class="seg" id="ranges">${RANGES.map((r) => `<button data-r="${r.k}" class="${r.k === S.store.range ? 'on' : ''}">${r.l}</button>`).join('')}</div>
@@ -455,7 +454,6 @@ function rangeSeries(d, k) {
     case 'm1': return cut(d.daily, 31);
     case 'm6': return cut(d.daily, 183);
     case 'y1': return cut(d.daily, 366);
-    case 'y5': return cut(d.weekly, 365 * 5 + 3);
     default: return d.weekly || [];
   }
 }
@@ -555,7 +553,6 @@ function viewMore() {
       <div class="kv"><span class="k">Positionen im Depot</span><span class="v">${n}</span></div>
       <div class="kv"><span class="k">Wertpapiere in der Auswahl</span><span class="v">${S.catalog.length}</span></div>
       <div class="kv"><span class="k">Kursdaten vom</span><span class="v">${sm ? fmtDate(sm.updated, true) + ' Uhr' : '–'}</span></div>
-      ${sm?.fx?.USD ? `<div class="kv"><span class="k">EUR/USD</span><span class="v">${num(sm.fx.USD, 4)}</span></div>` : ''}
       ${sm?.errors?.length ? `<div class="kv"><span class="k">Nicht abrufbar</span><span class="v">${sm.errors.length}</span></div>` : ''}
     </div>
     <div class="section-h"><h2>Sicherung</h2></div>
@@ -566,7 +563,7 @@ function viewMore() {
     <div class="section-h"><h2>So nutzt du die App</h2></div>
     <div class="card" style="font-size:14px;line-height:1.55">
       <b>Auf den Home-Bildschirm:</b> In Safari unten auf <i>Teilen</i> tippen → <i>Zum Home-Bildschirm</i>.<br><br>
-      <b>Kurse:</b> werden an Börsentagen etwa alle 20 Minuten aktualisiert (Yahoo Finance), Wechselkurse in Euro umgerechnet. Die Kurse können leicht von Trade Republic abweichen.<br><br>
+      <b>Kurse:</b> kommen von onvista, möglichst von der LS Exchange (dem Handelsplatz von Trade Republic), in Euro. Sie werden an Börsentagen etwa alle 20 Minuten aktualisiert und sind daher leicht verzögert.<br><br>
       <b>Kursverlauf:</b> Finger auf das Diagramm legen und ziehen, um einzelne Kurse zu sehen.
     </div>
     <div class="actions"><button class="btn danger block" id="reset">Depot zurücksetzen</button></div>

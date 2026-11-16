@@ -12,9 +12,9 @@ Persönliche Depot-Übersicht als Web-App fürs iPhone – für Aktien, ETFs und
 - Dein Depot bleibt nur auf deinem Gerät (localStorage), Sicherung/Wiederherstellung unter „Mehr“
 
 ## So funktioniert's
-Der Workflow `.github/workflows/update.yml` lädt an Börsentagen alle ~20 Minuten Kurse (Yahoo Finance)
-und Nachrichten (Google News) für alle Werte aus `catalog.json` und veröffentlicht App + Daten im Branch `gh-pages`.
+Der Workflow `.github/workflows/update.yml` lädt an Börsentagen alle ~20 Minuten Kurse
+(onvista, bevorzugt LS Exchange = Trade-Republic-Handelsplatz) und Nachrichten (Google News) für alle Werte aus `catalog.json` und veröffentlicht App + Daten im Branch `gh-pages`.
 
-**Neues Wertpapier ergänzen:** Eintrag in `catalog.json` hinzufügen (`symbol` = Yahoo-Finance-Kürzel, z. B. `SAP.DE`, `AAPL`, `EUNL.DE`).
+**Neues Wertpapier ergänzen:** Eintrag in `catalog.json` hinzufügen (mit `isin`).
 
 Keine Anlageberatung, alle Angaben ohne Gewähr.
