@@ -1,0 +1,16 @@
+#!/bin/bash
+UA="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+t() { echo "=== $1"; curl -sS -m 20 -A "$UA" -o /tmp/o -w "HTTP %{http_code} %{size_download}B\n" "$1"; head -c 600 /tmp/o | tr '\n' ' '; echo; }
+t "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5d&interval=1d"
+t "https://query2.finance.yahoo.com/v8/finance/chart/SAP.DE?range=5d&interval=1d"
+t "https://stooq.com/q/d/l/?s=aapl.us&i=d"
+t "https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcvn&h&e=csv"
+t "https://api.onvista.de/api/v1/stocks/ISIN:US0378331005/snapshot"
+t "https://api.onvista.de/api/v1/instruments/query?searchValue=IE00B4L5Y983"
+t "https://api.onvista.de/api/v1/funds/ISIN:IE00B4L5Y983/snapshot"
+t "https://www.tradegate.de/refresh.php?isin=US0378331005"
+t "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=eur&days=7"
+t "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&lastNObservations=3"
+t "https://api.nasdaq.com/api/quote/AAPL/info?assetclass=stocks"
+t "https://www.boerse-frankfurt.de/"
+t "https://news.google.com/rss/search?q=SAP+Aktie&hl=de&gl=DE&ceid=DE:de"
