@@ -142,7 +142,7 @@ def pick_quote(snap):
     raise RuntimeError("kein Kurs")
 
 
-def process(item, ref, now):
+def process(item, ref, now, old_detail=None):
     snap = snapshot(item, ref)
     inst = snap["instrument"]
     et, ev = inst["entityType"], inst["entityValue"]
@@ -173,17 +173,24 @@ def process(item, ref, now):
         week = [[int(t / 1000), r(conv(v))] for t, v in zip(w.get("datetimeTick", []), w.get("tick", [])) if v is not None]
     except RuntimeError:
         week = []
-    week.sort()
-    if price is not None and (not week or week[-1][0] < t_last - 60):
-        week.append([t_last, r(price)])
+    # mit früheren Abrufen zusammenführen, damit der laufende Tag lückenlos wird
+    od = old_detail or {}
+    week_cut = int((now - timedelta(days=8)).timestamp())
+    merged = {t: v for t, v in (od.get("week") or []) if t >= week_cut and v is not None}
+    for t, v in week:
+        merged[t] = v
+    if price is not None:
+        merged[t_last] = r(price)
+    week = sorted([[t, v] for t, v in merged.items()])
     intra = []
     if week:
         last_day = datetime.fromtimestamp(week[-1][0], BERLIN).date()
         intra = [p for p in week if datetime.fromtimestamp(p[0], BERLIN).date() == last_day]
         if prev is not None and intra:
             day_start = int(datetime.combine(last_day, datetime.min.time(), BERLIN).timestamp())
-            if intra[0][0] > day_start:
-                intra = [[day_start, r(prev)]] + intra
+            open_t = min(intra[0][0] - 1800, day_start + 8 * 3600)
+            if intra[0][0] > open_t:
+                intra = [[open_t, r(prev)]] + intra
 
     # Wochenwerte für 5 Jahre (letzter Kurs je Kalenderwoche)
     weekly, seen = [], {}
@@ -281,7 +288,7 @@ def main():
         prev_detail = old_detail(iid) or {}
         prev_sum = old_summary.get(iid, {})
         try:
-            summary, detail = process(item, prev_sum.get("ref") or {}, now)
+            summary, detail = process(item, prev_sum.get("ref") or {}, now, prev_detail)
             summary["ok"] = int(now.timestamp())
         except Exception as e:  # noqa: BLE001
             errors.append(f"{iid}: {e}")
