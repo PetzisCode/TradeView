@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TradeView">
+  <meta name="theme-color" content="#0b0d12">
+  <title>TradeView</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css?v=80e193d0">
+</head>
+<body>
+  <main id="view"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <a href="#/" data-tab="home">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="10" height="11" rx="2"/><rect x="15" y="3" width="6" height="6" rx="2"/><rect x="15" y="11" width="6" height="10" rx="2"/><rect x="3" y="16" width="10" height="5" rx="2"/></svg>
+      <span>Depot</span>
+    </a>
+    <a href="#/markt" data-tab="markt">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke-width="2.2"/><path d="M16 16l5 5" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <span>Hinzufügen</span>
+    </a>
+    <a href="#/mehr" data-tab="mehr">
+      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>
+      <span>Mehr</span>
+    </a>
+  </nav>
+
+  <div id="sheet" class="sheet hidden" aria-hidden="true"></div>
+
+  <script src="app.js?v=80e193d0"></script>
+</body>
+</html>
